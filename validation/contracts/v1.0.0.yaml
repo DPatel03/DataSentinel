@@ -1,0 +1,82 @@
+contract_version: "1.0.0"
+dataset: nyc_yellow_taxi
+description: >
+  Data contract for NYC Yellow Taxi rides streamed through DataSentinel.
+  Supports pre-2020 (v1) and post-2020 (v2) Avro schemas.
+
+schema_versions:
+  v1:
+    parquet_years: "2015-2019"
+    avro_schema: taxi-ride-v1
+    notes: "No congestion_surcharge field"
+  v2:
+    parquet_years: "2020+"
+    avro_schema: taxi-ride-v2
+    notes: "Adds congestion_surcharge"
+
+fields:
+  vendor_id:
+    type: integer
+    nullable: true
+    allowed_values: [1, 2]
+
+  pickup_datetime:
+    type: timestamp
+    nullable: false
+
+  dropoff_datetime:
+    type: timestamp
+    nullable: false
+
+  passenger_count:
+    type: float
+    nullable: true
+    range: [0, 9]
+    null_threshold_pct: 1.0
+
+  trip_distance:
+    type: float
+    nullable: false
+    range: [0, 100]
+    null_threshold_pct: 0.01
+
+  fare_amount:
+    type: float
+    nullable: false
+    range: [0, 500]
+    null_threshold_pct: 0.01
+
+  total_amount:
+    type: float
+    nullable: false
+    range: [0, 1000]
+    null_threshold_pct: 0.01
+
+  pulocation_id:
+    type: integer
+    nullable: true
+    range: [1, 265]
+
+  dolocation_id:
+    type: integer
+    nullable: true
+    range: [1, 265]
+
+  congestion_surcharge:
+    type: float
+    nullable: true
+    range: [0, 50]
+    schema_versions: [v2]
+    null_threshold_pct: 5.0
+
+logical_rules:
+  - name: dropoff_after_pickup
+    description: dropoff_datetime must be >= pickup_datetime
+
+  - name: max_trip_speed_mph
+    description: implied speed (distance / duration) must be <= 100 mph
+    max_speed_mph: 100
+
+slas:
+  max_failure_rate_pct: 2.0
+  p95_validation_latency_ms: 500

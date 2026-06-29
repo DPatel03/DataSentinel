@@ -1,0 +1,81 @@
+[
+  {
+    "payload": {
+      "record": {
+        "pickup_datetime": "2019-01-01T08:30:00",
+        "dropoff_datetime": "2019-01-01T08:45:00",
+        "fare_amount": -14.5,
+        "trip_distance": 2.5,
+        "total_amount": 15.0,
+        "schema_version": "v1"
+      },
+      "rule_violated": "fare_amount_range",
+      "contract_version": "1.0.0",
+      "timestamp": "2026-01-01T00:00:00Z",
+      "sample_good_records": []
+    },
+    "expected_class": "data_entry_error"
+  },
+  {
+    "payload": {
+      "record": {
+        "pickup_datetime": "2019-01-01T09:00:00",
+        "dropoff_datetime": "2019-01-01T08:30:00",
+        "fare_amount": 12.0,
+        "trip_distance": 2.0,
+        "total_amount": 14.0,
+        "schema_version": "v1"
+      },
+      "rule_violated": "dropoff_after_pickup",
+      "contract_version": "1.0.0",
+      "timestamp": "2026-01-01T00:00:00Z",
+      "sample_good_records": []
+    },
+    "expected_class": "data_entry_error"
+  },
+  {
+    "payload": {
+      "record": {
+        "pickup_datetime": "2019-01-01T10:00:00",
+        "dropoff_datetime": "2019-01-01T10:30:00",
+        "fare_amount": 50.0,
+        "trip_distance": 150.0,
+        "total_amount": 60.0,
+        "schema_version": "v1"
+      },
+      "rule_violated": "trip_distance_range",
+      "contract_version": "1.0.0",
+      "timestamp": "2026-01-01T00:00:00Z",
+      "sample_good_records": []
+    },
+    "expected_class": "genuine_anomaly"
+  },
+  {
+    "payload": {
+      "record": null,
+      "rule_violated": "avro_deserialization_failed",
+      "contract_version": "1.0.0",
+      "timestamp": "2026-01-01T00:00:00Z",
+      "sample_good_records": []
+    },
+    "expected_class": "schema_drift"
+  },
+  {
+    "payload": {
+      "record": {
+        "pickup_datetime": "2021-06-01T09:00:00",
+        "dropoff_datetime": "2021-06-01T09:20:00",
+        "fare_amount": 10.0,
+        "trip_distance": 0.0,
+        "total_amount": 12.0,
+        "schema_version": "v2",
+        "congestion_surcharge": 2.5
+      },
+      "rule_violated": "trip_distance_range",
+      "contract_version": "1.0.0",
+      "timestamp": "2026-01-01T00:00:00Z",
+      "sample_good_records": []
+    },
+    "expected_class": "genuine_anomaly"
+  }
+]
