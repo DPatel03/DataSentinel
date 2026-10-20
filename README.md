@@ -1,48 +1,10 @@
 # DataSentinel
 
-Agentic data quality platform — NYC taxi trip streaming ingestion, validation, and AI triage.
+An agentic data quality platform for streaming data. It replays NYC taxi trips through Kafka, validates every record against a versioned data contract, and sends the failures to a set of LLM agents that decide what to do with each one: repair it, flag it as a real anomaly, propose a schema change, or hand it to a human. A dashboard shows breaches, triage results, and a review queue.
 
-## Week 1 checklist
+Everything runs without an API key. A heuristic classifier handles the obvious cases and the LLM is only called when confidence is low, so you can try the whole pipeline locally with `--mock-llm`.
 
-| Item | Status |
-|---|---|
-| `docker compose up` runs Kafka, Schema Registry, TimescaleDB | Done |
-| Two Avro schemas registered with compatibility enforced | Done |
-| Producer replays Parquet to `taxi.rides.raw` | Done |
-| YAML data contract versioned in Git | Done |
-| Great Expectations suite | Done |
-| Spark job routes valid → `validated`, invalid → `dead-letter` | Done |
-| DLQ message has record, rule, contract_version, timestamp, 5 good samples | Done |
-| Breach history queryable in TimescaleDB | Done |
-
-## Week 2 checklist
-
-| Item | Status |
-|---|---|
-| Coordinator routes DLQ failures to classifier | Done |
-| Classifier returns Pydantic-validated JSON (5 failure classes) | Done |
-| Heuristic pre-classifier with LLM fallback (< 0.7 confidence) | Done |
-| Repair agent fixes `data_entry_error` and re-validates | Done |
-| Repaired records routed to `taxi.rides.repaired` | Done |
-| Triage + repair history in TimescaleDB | Done |
-| Mock mode works without OpenAI API key | Done |
-
-## Week 3 checklist
-
-| Item | Status |
-|---|---|
-| Schema Evolution agent (`schema_drift`) | Done |
-| Anomaly Enrichment agent (`genuine_anomaly` → `taxi.rides.anomaly`) | Done |
-| Known pattern matching → `known_edge_case` | Done |
-| Human Escalation agent (`requires_human_review`) | Done |
-| Slack webhook + `review_queue` table | Done |
-| GitHub issue on schema drift (optional) | Done |
-| Prompt version registry in PostgreSQL | Done |
-| Prompt eval + auto-rollback on accuracy regression | Done |
-
----
-
-## Architecture (Week 1–3)
+## Architecture
 
 ```
 Parquet → Producer → taxi.rides.raw → Validator → taxi.rides.validated
@@ -61,88 +23,59 @@ Parquet → Producer → taxi.rides.raw → Validator → taxi.rides.validated
                               repaired        events + GitHub    anomaly       + Slack
 ```
 
+## Features
+
+| Layer | What it does |
+|---|---|
+| **Streaming ingestion** | Replays NYC TLC Parquet via Kafka with Avro + Schema Registry (pre/post-2020 schema drift) |
+| **Validation** | YAML data contracts (Python streaming default) → `validated` or `dead-letter` with 5 good-record samples |
+| **AI triage** | Coordinator routes failures to Classifier, Repair, Schema Evolution, Anomaly, Escalation agents |
+| **Prompt registry** | Versioned prompts in PostgreSQL with eval + auto-rollback on accuracy regression |
+| **Eval harness** | 300-record labeled dataset, adversarial suite, MLflow metrics |
+| **Dashboard** | FastAPI + React — breaches, triage, repairs, LLM traces, review queue |
+
 ---
 
 ## Quick start
 
-### 1. Prerequisites
+### Prerequisites
 
 - Docker Desktop
-- Python 3.11+
+- Python 3.11+ (optional — only needed for host-side tests / 4-terminal mode)
+- Node.js 18+ (optional, for dashboard frontend hot-reload)
 
-### 2. One-time setup
+### One-command pipeline
+
+Starts Kafka, Schema Registry, TimescaleDB, validator, triage, dashboard, and a sample producer:
+
+```bash
+chmod +x scripts/start_pipeline.sh
+./scripts/start_pipeline.sh
+```
+
+Or:
+
+```bash
+docker compose --profile pipeline up --build -d
+```
+
+Open http://localhost:8888 — token is `DASHBOARD_AUTH_TOKEN` (default `datasentinel-local`, local demo only). Demo rows are seeded automatically so the dashboard is not empty. Click a breach or review row for the raw record, good samples, and repair diff. Accept or reject stores a human label.
+
+To re-seed later: `python scripts/seed_demo.py`
+
+### Host setup (tests + 4-terminal workflow)
 
 ```bash
 cd DataSentinel
-chmod +x scripts/setup_week1.sh
-./scripts/setup_week1.sh
+chmod +x scripts/setup.sh
+./scripts/setup.sh
 ```
 
-Or manually:
+This starts Docker infra, registers schemas, runs migrations, generates sample data, seeds prompts, and runs tests.
 
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-docker compose up -d
-python ingestion/register_schemas.py
-python scripts/generate_sample_parquet.py
-```
+### Run the full pipeline on the host (4 terminals)
 
-### 3. Run the pipeline (3 terminals)
-
-**Terminal A — validator** (start first):
-
-```bash
-source .venv/bin/activate
-export PYTHONPATH=.
-
-# Recommended locally — no Java required
-python -m validation.streaming_validator --from-beginning
-
-# Or PySpark (auto-uses Java 17 on macOS if default Java is 24+)
-python -m validation.spark_job
-```
-
-**Terminal B — Producer** (replay sample data):
-
-```bash
-source .venv/bin/activate
-export PYTHONPATH=.
-python -m ingestion.producer \
-  --file data/yellow_tripdata_2019-01_sample.parquet \
-  --max-records 100 \
-  --compression-factor 0
-```
-
-Use `--compression-factor 4320` for real time compression (~30 days in 10 min).
-
-**Terminal C — Verify breaches**:
-
-```bash
-source .venv/bin/activate
-python scripts/query_breaches.py
-```
-
-### 4. Inspect in AKHQ
-
-Open http://localhost:8080 — browse `taxi.rides.raw`, `taxi.rides.validated`, `taxi.rides.dead-letter`, `taxi.rides.repaired`.
-
----
-
-## Week 2 — AI Triage (Classifier + Repair)
-
-### Setup
-
-```bash
-chmod +x scripts/setup_week2.sh
-./scripts/setup_week2.sh
-```
-
-This applies DB migrations (`triage_events`, `repair_attempts`) and runs unit tests.
-
-### Run the full pipeline (4 terminals)
-
-**Terminal A — Validator** (same as Week 1):
+**Terminal A — Validator** (start first):
 
 ```bash
 source .venv/bin/activate
@@ -159,110 +92,83 @@ python -m ingestion.producer \
   --compression-factor 0
 ```
 
-**Terminal C — Triage service** (start after DLQ has messages):
+**Terminal C — Triage service**:
 
 ```bash
 python -m agents.triage_service --from-beginning --mock-llm
 ```
 
-Use real GPT-4o-mini by setting `OPENAI_API_KEY` in `.env` and omitting `--mock-llm`.
+Use real GPT-4o-mini by setting `OPENAI_API_KEY` in `.env` and omitting `--mock-llm`. New classifier prompts are eval'd on a held-out LLM slice when the key is set, and only activated if accuracy stays above the threshold.
 
 **Terminal D — Verify**:
 
 ```bash
-python scripts/query_triage.py
-python scripts/query_breaches.py
+python scripts/query_status.py
 ```
 
-### What Week 2 adds
+### Dashboard (host)
 
-| Component | What it does |
-|---|---|
-| **Coordinator** | Receives DLQ payload, orchestrates classify → repair |
-| **Classifier** | Heuristic first; LLM if confidence < 0.7; 3s timeout + retry |
-| **Repair** | Fixes `data_entry_error` (negative fare, swapped datetimes); re-validates |
-| **`taxi.rides.repaired`** | Kafka topic for successfully repaired records |
-| **`triage_events`** | TimescaleDB hypertable — failure class, confidence, explanation |
-| **`repair_attempts`** | TimescaleDB hypertable — repair confidence, validation result |
+**Terminal A — API** (port 8888):
 
-### Classification output (Pydantic)
-
-```json
-{
-  "failure_class": "data_entry_error",
-  "confidence": 0.92,
-  "explanation": "Negative fare is almost certainly a sign-entry error.",
-  "affected_field": "fare_amount",
-  "suggested_fix": "Use absolute value: 14.5",
-  "requires_human_review": false,
-  "source": "heuristic"
-}
+```bash
+source .venv/bin/activate
+export PYTHONPATH=.
+npm run dashboard:api
 ```
 
-### Enable real LLM
+**Terminal B — UI** (port 3000):
 
-Add to `.env`:
-
-```
-OPENAI_API_KEY=sk-...
+```bash
+npm run dashboard:dev
 ```
 
-Then run triage without `--mock-llm`.
+Open http://localhost:3000
+
+Or run both together:
+
+```bash
+npm install   # once, installs concurrently
+npm run dashboard
+```
+
+If `DASHBOARD_AUTH_TOKEN` is set, the UI will ask for it. Leave it empty to disable auth on the host.
+
+### Tests
+
+```bash
+source .venv/bin/activate
+export PYTHONPATH=.
+pytest tests -q
+```
+
+The suite (40 tests) runs without Docker or an API key.
+
+### Eval harness
+
+```bash
+python eval/dataset/generate_dataset.py   # 300 labeled records
+python eval/runner.py                     # metrics → mlruns/
+```
+
+The dataset has 300 labeled records generated with a fixed seed, and 50 of them are adversarial (hallucination injection, ambiguous cases, edge cases, repair cases). With no API key the runner scores the heuristic classifier only, and on a fresh run it reported 100% classification accuracy, 97.1% repair accuracy, and 0% hallucination. The labels come from the same rules the generator uses, so read that as a regression check on the plumbing, not as a measure of LLM accuracy. Pass `--coordinator` to run the full agent pipeline instead of the heuristic classifier alone.
 
 ---
 
-## Week 3 — Advanced Agents + Prompt Registry
-
-### Setup
+## Configuration (`.env`)
 
 ```bash
-chmod +x scripts/setup_week3.sh
-./scripts/setup_week3.sh
-```
+# Required for real LLM (optional — heuristics work without it)
+OPENAI_API_KEY=sk-...
 
-### Run pipeline (same 4 terminals, updated triage command)
-
-**Terminal C — Triage service (Week 3):**
-
-```bash
-python -m agents.triage_service --from-beginning --mock-llm --seed-prompts
-```
-
-**Terminal D — Verify Week 3:**
-
-```bash
-python scripts/query_week3.py
-python scripts/query_triage.py
-```
-
-### What Week 3 adds
-
-| Agent | Triggers on | What it does |
-|---|---|---|
-| **Schema Evolution** | `schema_drift` | Detects v1/v2, generates GE suite code, opens GitHub issue, updates Schema Registry if confidence ≥ 0.85 |
-| **Anomaly Enrichment** | `genuine_anomaly` | LLM explanation, severity 1–5, routes to `taxi.rides.anomaly` |
-| **Known patterns** | matching history | Reclassifies to `known_edge_case` (e.g. extreme distance) |
-| **Human Escalation** | `requires_human_review` | Summary → `review_queue` + Slack webhook |
-| **Prompt Registry** | all agents | Versioned prompts in DB, eval on change, auto-rollback if accuracy < 85% |
-
-### Optional integrations (`.env`)
-
-```bash
-GITHUB_TOKEN=ghp_...          # Opens issues on schema drift
+# Optional integrations
+GITHUB_TOKEN=ghp_...
 GITHUB_REPO=your-org/DataSentinel
 SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
-OPENAI_API_KEY=sk-...         # Real LLM (omit --mock-llm)
+LANGFUSE_PUBLIC_KEY=pk-...
+LANGFUSE_SECRET_KEY=sk-...
 ```
 
-### Prompt registry CLI
-
-```bash
-# Seed prompts from agents/prompts/*.txt
-python -c "from agents.prompt_registry.registry import PromptRegistry; PromptRegistry().seed_from_files()"
-
-# List versions
-python -c "from agents.prompt_registry.registry import PromptRegistry; print(PromptRegistry().list_versions('classifier'))"
-```
+Copy from `.env.example` if you don't have a `.env` yet.
 
 ---
 
@@ -270,7 +176,7 @@ python -c "from agents.prompt_registry.registry import PromptRegistry; print(Pro
 
 ### `python: command not found`
 
-macOS often only has `python3`. Activate the venv first — it provides `python`:
+Activate the venv first — it provides `python`:
 
 ```bash
 source .venv/bin/activate
@@ -278,113 +184,62 @@ source .venv/bin/activate
 
 ### `role "datasentinel" does not exist`
 
-Your Mac likely has **local PostgreSQL on port 5432**. DataSentinel TimescaleDB uses **port 5433**.
+Local PostgreSQL may be on port 5432. DataSentinel uses **port 5433**:
 
 ```bash
 docker compose down && docker compose up -d
-docker compose exec timescaledb psql -U datasentinel -d datasentinel -c '\dt'
-python scripts/query_breaches.py
+python scripts/migrate.py
+python scripts/query_status.py
 ```
 
 ### Schema registration failed
-
-Re-run after the fix:
 
 ```bash
 source .venv/bin/activate && export PYTHONPATH=.
 python ingestion/register_schemas.py
 ```
 
-### Spark fails with `getSubject is not supported`
+### Spark fails with Java errors
 
-Your default Java is **24** — PySpark 3.5 only supports up to Java 21.
+The default validator is pure Python (no Java). Spark is optional:
 
-**Option A (easiest):** use the Python validator:
+```bash
+pip install -r requirements-spark.txt
+export JAVA_HOME=$(/usr/libexec/java_home -v 17)
+python -m validation.spark_job
+```
+
+Or just use:
 
 ```bash
 python -m validation.streaming_validator
 ```
 
-**Option B:** PySpark auto-switches to Java 17. Or set manually:
-
-```bash
-export JAVA_HOME=$(/usr/libexec/java_home -v 17)
-python -m validation.spark_job
-```
-
-### Spark validator slow to start
-
-First run downloads Spark Kafka JARs (~30s). Wait 10–20s for imports — don't Ctrl+C immediately.
-
 ### Correct run order
 
+**Compose pipeline:** `docker compose --profile pipeline up --build -d`
+
+**Host:**
+
 1. `docker compose up -d`
-2. `python ingestion/register_schemas.py`
-3. **Validator first:** `python -m validation.streaming_validator`
-4. **Then producer:** `python -m ingestion.producer ...`
-5. `python scripts/query_breaches.py`
+2. `python scripts/migrate.py`
+3. `python ingestion/register_schemas.py`
+4. **Validator first**, then **producer**, then **triage**
+5. `python scripts/query_status.py`
 
 ---
 
-## What each component does
+## Connection strings
 
-### Avro schemas (`ingestion/schemas/`)
-
-| File | Purpose |
+| Service | URL |
 |---|---|
-| `taxi-ride-v1.avsc` | Pre-2020 NYC taxi format (no `congestion_surcharge`) |
-| `taxi-ride-v2.avsc` | Post-2020 format (adds `congestion_surcharge`) |
-
-Registered in Schema Registry with **BACKWARD** compatibility on subject `taxi.rides.raw-value`. Breaking schema changes are rejected at the registry.
-
-### Producer (`ingestion/producer/`)
-
-- Reads TLC Parquet row-by-row
-- Maps PascalCase columns → Avro snake_case fields
-- Auto-detects v1 vs v2 from pickup year (or `--schema-version`)
-- Publishes Confluent Avro-encoded messages to `taxi.rides.raw`
-- Time compression via `--compression-factor`
-
-### Data contract (`validation/contracts/v1.0.0.yaml`)
-
-Versioned YAML defining expected types, null thresholds, value ranges, and SLAs. Both v1 and v2 schema versions are covered.
-
-### Great Expectations (`validation/expectations/`)
-
-- **Per-record validation** — used by the Spark streaming job
-- **Batch GE suite** — `run_static_validation.py` for testing against Parquet before streaming
-
-```bash
-export PYTHONPATH=.
-python validation/expectations/run_static_validation.py \
-  --file data/yellow_tripdata_2019-01_sample.parquet
-```
-
-### Spark validator (`validation/spark_job/`)
-
-PySpark Structured Streaming job that:
-
-1. Consumes `taxi.rides.raw`
-2. Deserializes Avro via Schema Registry
-3. Validates each record against the YAML contract + GE rules
-4. Routes **valid** → `taxi.rides.validated` (JSON)
-5. Routes **invalid** → `taxi.rides.dead-letter` with structured payload:
-
-```json
-{
-  "record": { "...": "..." },
-  "rule_violated": "fare_amount_range",
-  "contract_version": "1.0.0",
-  "timestamp": "2026-06-16T...",
-  "sample_good_records": [ "...5 nearest valid records by pickup time..." ]
-}
-```
-
-6. Writes breach rows to TimescaleDB `contract_breaches` hypertable
-
-### TimescaleDB (`infra/init.sql`)
-
-`contract_breaches` hypertable stores rule violations over time for querying and dashboards.
+| Kafka | `localhost:9092` |
+| Schema Registry | `http://localhost:8081` |
+| TimescaleDB | `postgresql://datasentinel:datasentinel@127.0.0.1:5433/datasentinel` (local demo only) |
+| AKHQ (Kafka UI) | `http://localhost:8080` |
+| Dashboard (Compose) | `http://localhost:8888` |
+| Dashboard UI (host) | `http://localhost:3000` |
+| Dashboard API (host) | `http://localhost:8888` |
 
 ---
 
@@ -400,60 +255,42 @@ curl -L -o data/yellow_tripdata_2021-01.parquet \
   https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2021-01.parquet
 ```
 
-Then run the producer against those files.
-
----
-
-## Connection strings
-
-| Service | URL |
-|---|---|
-| Kafka | `localhost:9092` |
-| Schema Registry | `http://localhost:8081` |
-| TimescaleDB | `postgresql://datasentinel:datasentinel@127.0.0.1:5433/datasentinel` |
-| AKHQ UI | `http://localhost:8080` |
-
 ---
 
 ## Project layout
 
 ```
 DataSentinel/
-├── docker-compose.yml
+├── Dockerfile                # App image (validator / triage / dashboard / producer)
+├── docker-compose.yml        # Infra always; --profile pipeline for services
 ├── requirements.txt
+├── requirements-app.txt      # Slim runtime deps for Docker
+├── requirements-spark.txt    # Optional PySpark validator
 ├── infra/
 │   ├── init.sql
-│   └── week2.sql
-├── ingestion/
-│   ├── schemas/
-│   ├── register_schemas.py
-│   └── producer/
-├── validation/
-│   ├── contracts/
-│   ├── expectations/
-│   ├── streaming_validator/
-│   └── spark_job/
-├── agents/
-│   ├── coordinator.py
-│   ├── classifier.py
-│   ├── repair.py
-│   ├── schema_evolution.py      # Week 3
-│   ├── anomaly_enrichment.py    # Week 3
-│   ├── escalation.py            # Week 3
-│   ├── prompt_registry/         # Week 3
-│   ├── prompts/
-│   └── triage_service/
+│   └── migrations.sql
+├── ingestion/                # Kafka producer + Avro schemas + ride keys
+├── validation/               # YAML contracts + Python streaming validator
+├── agents/                   # Multi-agent AI triage
+├── eval/                     # Eval harness + 300-record dataset
+├── dashboard/                # FastAPI + React
+├── dags/                     # Optional Airflow prompt eval
 ├── tests/
-│   ├── test_agents.py
-│   └── test_week3.py
 ├── scripts/
-│   ├── setup_week1.sh
-│   ├── setup_week2.sh
-│   ├── setup_week3.sh
-│   ├── migrate_week2.py
-│   ├── migrate_week3.py
-│   ├── query_triage.py
-│   ├── query_week3.py
-│   └── query_breaches.py
+│   ├── setup.sh
+│   ├── start_pipeline.sh
+│   ├── migrate.py
+│   └── query_status.py
 └── data/
 ```
+
+---
+
+## Optional: Airflow eval DAG
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d
+# UI: http://localhost:8085 (admin / admin)
+# Trigger: datasentinel_prompt_eval
+```
+
