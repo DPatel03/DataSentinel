@@ -1,4 +1,7 @@
 .env
+.env.*
+!.env.example
+!dashboard/frontend/.env.development
 data/
 __pycache__/
 *.pyc
@@ -8,3 +11,14 @@ venv/
 .spark/
 *.parquet
 .DS_Store
+mlruns/
+dashboard/frontend/node_modules/
+dashboard/frontend/dist/
+node_modules/
+.coverage
+htmlcov/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.vscode/
+eval/dataset/full_dataset.json

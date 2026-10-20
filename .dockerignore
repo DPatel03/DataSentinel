@@ -1,0 +1,17 @@
+.venv
+venv
+.git
+.github
+.pytest_cache
+.spark
+mlruns
+node_modules
+dashboard/frontend/node_modules
+dashboard/frontend/dist
+data
+**/*.parquet
+**/__pycache__
+*.pyc
+.env
+.DS_Store
+canvases
