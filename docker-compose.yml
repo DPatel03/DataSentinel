@@ -132,6 +132,122 @@ services:
                 url: http://schema-registry:8081
                 type: confluent
 
+  validator:
+    profiles: ["pipeline"]
+    build: .
+    image: datasentinel-app:local
+    container_name: datasentinel-validator
+    command: python -m validation.streaming_validator
+    environment:
+      PYTHONPATH: /app
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      TIMESCALEDB_DSN: postgresql://${POSTGRES_USER:-datasentinel}:${POSTGRES_PASSWORD:-datasentinel}@timescaledb:5432/${POSTGRES_DB:-datasentinel}
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      schema-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  triage:
+    profiles: ["pipeline"]
+    build: .
+    image: datasentinel-app:local
+    container_name: datasentinel-triage
+    command: python -m agents.triage_service --seed-prompts
+    environment:
+      PYTHONPATH: /app
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      TIMESCALEDB_DSN: postgresql://${POSTGRES_USER:-datasentinel}:${POSTGRES_PASSWORD:-datasentinel}@timescaledb:5432/${POSTGRES_DB:-datasentinel}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_REPO: ${GITHUB_REPO:-}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+    depends_on:
+      validator:
+        condition: service_started
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
+
+  dashboard:
+    profiles: ["pipeline"]
+    build: .
+    image: datasentinel-app:local
+    container_name: datasentinel-dashboard
+    command: uvicorn dashboard.api.main:app --host 0.0.0.0 --port 8888
+    ports:
+      - "${DASHBOARD_API_PORT:-8888}:8888"
+    environment:
+      PYTHONPATH: /app
+      TIMESCALEDB_DSN: postgresql://${POSTGRES_USER:-datasentinel}:${POSTGRES_PASSWORD:-datasentinel}@timescaledb:5432/${POSTGRES_DB:-datasentinel}
+      DASHBOARD_CORS_ORIGINS: ${DASHBOARD_CORS_ORIGINS:-http://localhost:3000,http://localhost:8888}
+      DASHBOARD_AUTH_TOKEN: ${DASHBOARD_AUTH_TOKEN:-datasentinel-local}
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8888/api/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+    restart: unless-stopped
+
+  demo-seed:
+    profiles: ["pipeline"]
+    build: .
+    image: datasentinel-app:local
+    container_name: datasentinel-demo-seed
+    command:
+      - /bin/sh
+      - -c
+      - python scripts/migrate.py && python scripts/seed_demo.py
+    environment:
+      PYTHONPATH: /app
+      TIMESCALEDB_DSN: postgresql://${POSTGRES_USER:-datasentinel}:${POSTGRES_PASSWORD:-datasentinel}@timescaledb:5432/${POSTGRES_DB:-datasentinel}
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: "no"
+
+  producer:
+    profiles: ["pipeline"]
+    build: .
+    image: datasentinel-app:local
+    container_name: datasentinel-producer
+    command:
+      - /bin/sh
+      - -c
+      - |
+        python scripts/generate_sample_parquet.py
+        python -m ingestion.producer \
+          --file data/yellow_tripdata_2019-01_sample.parquet \
+          --max-records $${PRODUCER_MAX_RECORDS:-100} \
+          --compression-factor 0
+    environment:
+      PYTHONPATH: /app
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      PRODUCER_MAX_RECORDS: ${PRODUCER_MAX_RECORDS:-100}
+    depends_on:
+      validator:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+      schema-init:
+        condition: service_completed_successfully
+    restart: "no"
+
 volumes:
   kafka_data:
   timescaledb_data:

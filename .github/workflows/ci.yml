@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: datasentinel
+          POSTGRES_PASSWORD: datasentinel
+          POSTGRES_DB: datasentinel
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U datasentinel -d datasentinel"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Generate eval dataset
+        run: python eval/dataset/generate_dataset.py
+        env:
+          PYTHONPATH: .
+
+      - name: Run tests
+        run: pytest tests/ -q
+        env:
+          PYTHONPATH: .
+          TIMESCALEDB_DSN: postgresql://datasentinel:datasentinel@127.0.0.1:5433/datasentinel
+
+      - name: Run eval harness
+        run: python eval/runner.py --no-adversarial
+        env:
+          PYTHONPATH: .
