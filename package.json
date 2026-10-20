@@ -1,0 +1,17 @@
+{
+  "name": "datasentinel",
+  "version": "1.2.0",
+  "private": true,
+  "description": "Agentic data quality platform",
+  "scripts": {
+    "dashboard:api": "sh -c 'export PYTHONPATH=. && .venv/bin/python -m uvicorn dashboard.api.main:app --reload --host 127.0.0.1 --port 8888'",
+    "dashboard:dev": "npm run dev --prefix dashboard/frontend",
+    "dashboard:build": "npm run build --prefix dashboard/frontend",
+    "dashboard:preview": "npm run preview --prefix dashboard/frontend",
+    "dashboard": "./scripts/start_dashboard.sh",
+    "smoke": "./scripts/smoke_test.sh"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
