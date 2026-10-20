@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from datetime import datetime
@@ -16,6 +17,7 @@ from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroSerializer
 from confluent_kafka.serialization import SerializationContext, MessageField
 
+from ingestion.keys import ride_key
 from ingestion.producer.mapper import infer_schema_version, parquet_row_to_avro
 
 SCHEMAS_DIR = Path(__file__).resolve().parents[1] / "schemas"
@@ -83,7 +85,7 @@ def run(
 
         producer.produce(
             topic=RAW_TOPIC,
-            key=record["pickup_datetime"].encode("utf-8"),
+            key=ride_key(record).encode("utf-8"),
             value=payload,
             on_delivery=delivery_report,
         )
@@ -113,8 +115,14 @@ def _row_get_pickup(row: dict) -> datetime:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Replay NYC taxi Parquet to Kafka")
     parser.add_argument("--file", required=True, type=Path, help="Parquet file path")
-    parser.add_argument("--bootstrap-servers", default="localhost:9092")
-    parser.add_argument("--registry-url", default="http://localhost:8081")
+    parser.add_argument(
+        "--bootstrap-servers",
+        default=os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
+    )
+    parser.add_argument(
+        "--registry-url",
+        default=os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8081"),
+    )
     parser.add_argument("--schema-version", choices=["v1", "v2"], default=None)
     parser.add_argument(
         "--compression-factor",

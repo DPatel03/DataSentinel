@@ -7,7 +7,7 @@ import logging
 from agents.config import HEURISTIC_CONFIDENCE_THRESHOLD
 from agents.heuristics import classify_heuristic
 from agents.llm_client import LLMClient
-from agents.models import ClassificationResult, DLQPayload, FailureClass
+from agents.models import ClassificationResult, DLQPayload
 
 logger = logging.getLogger(__name__)
 

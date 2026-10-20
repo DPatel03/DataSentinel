@@ -1,13 +1,13 @@
-"""Week 3 agent tests."""
+"""Tests for advanced agents (schema evolution, anomaly, escalation, prompts)."""
 
 from __future__ import annotations
 
+from agents.agent_outputs import SchemaEvolutionResult
 from agents.anomaly_enrichment import AnomalyEnrichmentAgent
 from agents.coordinator import CoordinatorAgent
 from agents.models import DLQPayload, FailureClass
 from agents.prompt_registry.registry import PromptRegistry
 from agents.schema_evolution import SchemaEvolutionAgent
-from agents.week3_models import SchemaEvolutionResult
 
 
 def _dlq(rule: str, record: dict | None) -> DLQPayload:
@@ -85,5 +85,7 @@ def test_coordinator_anomaly_routes_enrichment():
 
 def test_prompt_registry_eval():
     registry = PromptRegistry()
-    accuracy = registry.evaluate_classifier_prompt()
+    accuracy, method = registry.evaluate_classifier()
     assert 0.0 <= accuracy <= 1.0
+    assert method == "heuristic_labeled_set"
+    assert registry.evaluate_classifier_prompt() == accuracy

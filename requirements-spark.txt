@@ -1,0 +1,3 @@
+# Optional PySpark streaming validator (not the default path).
+# pip install -r requirements-spark.txt
+pyspark==3.5.1

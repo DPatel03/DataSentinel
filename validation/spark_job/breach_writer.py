@@ -35,7 +35,8 @@ class BreachWriter:
                 breach.get("field_name"),
                 breach["contract_version"],
                 breach.get("failure_count", 1),
-                json.dumps(breach.get("sample_record")),
+                json.dumps(breach.get("sample_record"), default=str),
+                breach.get("record_key"),
             )
             for breach in breaches
         ]
@@ -45,7 +46,33 @@ class BreachWriter:
                 cursor,
                 """
                 INSERT INTO contract_breaches
-                    (time, rule_name, field_name, contract_version, failure_count, sample_record)
+                    (time, rule_name, field_name, contract_version, failure_count, sample_record, record_key)
+                VALUES %s
+                """,
+                rows,
+            )
+        self._conn.commit()
+
+    def write_validation_events(self, events: list[dict[str, Any]]) -> None:
+        if not events:
+            return
+        self.connect()
+        rows = [
+            (
+                event.get("time", datetime.now(timezone.utc)),
+                event["is_valid"],
+                event.get("latency_ms"),
+                event.get("rule_name"),
+                event.get("record_key"),
+            )
+            for event in events
+        ]
+        with self._conn.cursor() as cursor:
+            execute_values(
+                cursor,
+                """
+                INSERT INTO validation_events
+                    (time, is_valid, latency_ms, rule_name, record_key)
                 VALUES %s
                 """,
                 rows,

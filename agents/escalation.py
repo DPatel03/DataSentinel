@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from agents.config import SLACK_WEBHOOK_URL
 from agents.llm_client import LLMClient
 from agents.models import ClassificationResult, DLQPayload
-from agents.week3_models import EscalationResult
+from agents.agent_outputs import EscalationResult
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +22,8 @@ class _EscalationLLMOutput(BaseModel):
 
 
 class EscalationAgent:
-    def __init__(self, llm: LLMClient | None = None, db_dsn: str | None = None) -> None:
+    def __init__(self, llm: LLMClient | None = None) -> None:
         self.llm = llm or LLMClient()
-        self.db_dsn = db_dsn
 
     def escalate(
         self,
@@ -57,7 +56,6 @@ class EscalationAgent:
     def _mock_escalation(
         self, payload: DLQPayload, classification: ClassificationResult
     ) -> EscalationResult:
-        record = payload.record or {}
         field = classification.affected_field or "unknown"
         return EscalationResult(
             summary=(

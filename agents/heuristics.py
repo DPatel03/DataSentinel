@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import math
-from typing import Any
-
 from agents.models import ClassificationResult, DLQPayload, FailureClass, RepairResult
 from validation.contract import validate_record
 
@@ -67,6 +64,15 @@ def classify_heuristic(payload: DLQPayload) -> ClassificationResult:
                 requires_human_review=True,
                 source="heuristic",
             )
+        if distance is not None and float(distance) <= 0.01:
+            return ClassificationResult(
+                failure_class=FailureClass.KNOWN_EDGE_CASE,
+                confidence=0.86,
+                explanation="Zero or near-zero distance — known cancel / meter-reset pattern.",
+                affected_field="trip_distance",
+                suggested_fix="Do not auto-repair; exclude from distance aggregates.",
+                source="heuristic",
+            )
         return ClassificationResult(
             failure_class=FailureClass.DATA_ENTRY_ERROR,
             confidence=0.8,
@@ -86,11 +92,22 @@ def classify_heuristic(payload: DLQPayload) -> ClassificationResult:
             source="heuristic",
         )
 
-    if "schema" in rule or rule.endswith("_not_null"):
+    if rule.endswith("_not_null"):
+        return ClassificationResult(
+            failure_class=FailureClass.UPSTREAM_BUG,
+            confidence=0.84,
+            explanation=f"Required field missing — producer omitted {field or rule}.",
+            affected_field=field,
+            suggested_fix="Fix the upstream producer so required fields are always emitted.",
+            requires_human_review=True,
+            source="heuristic",
+        )
+
+    if "schema" in rule:
         return ClassificationResult(
             failure_class=FailureClass.SCHEMA_DRIFT,
             confidence=0.72,
-            explanation=f"Rule '{rule}' suggests schema or required-field mismatch.",
+            explanation=f"Rule '{rule}' suggests schema mismatch or an unknown version.",
             affected_field=field,
             requires_human_review=True,
             source="heuristic",

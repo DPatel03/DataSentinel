@@ -1,4 +1,4 @@
-"""Persist triage, repair, and Week 3 agent events to TimescaleDB."""
+"""Persist triage, repair, and agent events to TimescaleDB."""
 
 from __future__ import annotations
 

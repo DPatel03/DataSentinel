@@ -1,12 +1,10 @@
-"""Week 3 agent outputs."""
+"""Extended agent output models (schema evolution, anomaly, escalation)."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from pydantic import BaseModel, Field
-
-from agents.models import FailureClass
 
 
 class SchemaEvolutionResult(BaseModel):
@@ -28,7 +26,7 @@ class AnomalyEnrichmentResult(BaseModel):
     suggested_action: str
     matched_known_pattern: bool = False
     pattern_name: str | None = None
-    reclassified_from: FailureClass | None = None
+    reclassified_from: str | None = None
     routed_to_anomaly: bool = False
 
 

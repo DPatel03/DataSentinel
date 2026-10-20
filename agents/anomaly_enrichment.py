@@ -7,13 +7,12 @@ import logging
 from typing import Any
 
 import psycopg2
-from psycopg2.extras import RealDictCursor
 
 from pydantic import BaseModel, Field
 
 from agents.llm_client import LLMClient
 from agents.models import ClassificationResult, DLQPayload, FailureClass
-from agents.week3_models import AnomalyEnrichmentResult
+from agents.agent_outputs import AnomalyEnrichmentResult
 from validation.config import timescaledb_dsn
 
 logger = logging.getLogger(__name__)
@@ -31,7 +30,7 @@ KNOWN_PATTERNS: list[dict[str, Any]] = [
         "pattern_name": "zero_distance_trip",
         "rule_violated": "trip_distance_range",
         "field": "trip_distance",
-        "match": lambda r: r.get("trip_distance") == 0,
+        "match": lambda r: r.get("trip_distance") is not None and float(r["trip_distance"]) <= 0.01,
         "explanation": "Zero-distance trip — known edge case (passenger cancel or meter reset).",
         "severity": 2,
         "action": "Monitor; do not auto-repair.",
@@ -57,28 +56,13 @@ class AnomalyHistoryStore:
         rule = payload.rule_violated
 
         for pattern in KNOWN_PATTERNS:
-            if pattern["rule_violated"] == rule and pattern["match"](record):
-                return pattern
-
-        try:
-            with psycopg2.connect(self.dsn) as conn:
-                with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute(
-                        """
-                        SELECT pattern_name, rule_violated, field_name, explanation,
-                               severity, suggested_action
-                        FROM anomaly_patterns
-                        WHERE rule_violated = %s AND active = TRUE
-                        """,
-                        (rule,),
-                    )
-                    rows = cur.fetchall()
-            for row in rows:
-                field = row["field_name"]
-                if field and record.get(field) is not None:
-                    return dict(row)
-        except psycopg2.Error as exc:
-            logger.debug("Anomaly pattern DB lookup skipped: %s", exc)
+            if pattern["rule_violated"] != rule:
+                continue
+            try:
+                if pattern["match"](record):
+                    return pattern
+            except (TypeError, ValueError):
+                continue
 
         return None
 
@@ -149,7 +133,7 @@ class AnomalyEnrichmentAgent:
                 suggested_action=pattern.get("suggested_action", pattern.get("action", "Monitor")),
                 matched_known_pattern=True,
                 pattern_name=pattern.get("pattern_name"),
-                reclassified_from=FailureClass.GENUINE_ANOMALY
+                reclassified_from=FailureClass.GENUINE_ANOMALY.value
                 if classification.failure_class == FailureClass.KNOWN_EDGE_CASE
                 else None,
                 routed_to_anomaly=route,

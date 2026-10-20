@@ -1,4 +1,4 @@
-"""Coordinator agent — routes DLQ failures to specialized Week 2/3 agents."""
+"""Coordinator agent — routes DLQ failures to specialized sub-agents."""
 
 from __future__ import annotations
 

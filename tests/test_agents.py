@@ -1,8 +1,6 @@
-"""Tests for Week 2 agents (no API key required)."""
+"""Tests for AI triage agents (no API key required)."""
 
 from __future__ import annotations
-
-import pytest
 
 from agents.coordinator import CoordinatorAgent
 from agents.heuristics import classify_heuristic, repair_heuristic
@@ -97,6 +95,39 @@ def test_coordinator_end_to_end_mock():
     assert outcome.repair is not None
     assert outcome.repair.validation_passed
     assert RepairAgent().should_route(outcome.repair)
+
+
+def test_missing_required_field_is_upstream_bug():
+    payload = _dlq(
+        "pickup_datetime_not_null",
+        {
+            "dropoff_datetime": "2019-01-01T08:45:00",
+            "fare_amount": 12.0,
+            "trip_distance": 2.0,
+            "total_amount": 14.0,
+            "schema_version": "v1",
+        },
+    )
+    result = classify_heuristic(payload)
+    assert result.failure_class == FailureClass.UPSTREAM_BUG
+    assert result.affected_field == "pickup_datetime"
+
+
+def test_zero_distance_is_known_edge_case():
+    payload = _dlq(
+        "trip_distance_range",
+        {
+            "pickup_datetime": "2019-01-01T08:30:00",
+            "dropoff_datetime": "2019-01-01T08:45:00",
+            "fare_amount": 12.0,
+            "trip_distance": 0.0,
+            "total_amount": 14.0,
+            "schema_version": "v1",
+        },
+    )
+    result = classify_heuristic(payload)
+    assert result.failure_class == FailureClass.KNOWN_EDGE_CASE
+    assert result.affected_field == "trip_distance"
 
 
 def test_llm_client_mock_mode():

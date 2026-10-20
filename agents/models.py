@@ -57,7 +57,7 @@ class TriageOutcome(BaseModel):
     escalation: "EscalationResult | None" = None
 
 
-# Resolve forward refs for week3 models
-from agents.week3_models import AnomalyEnrichmentResult, EscalationResult, SchemaEvolutionResult  # noqa: E402
+# Resolve forward refs for extended agent outputs
+from agents.agent_outputs import AnomalyEnrichmentResult, EscalationResult, SchemaEvolutionResult  # noqa: E402
 
 TriageOutcome.model_rebuild()

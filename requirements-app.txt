@@ -1,0 +1,11 @@
+# Runtime image for validator, producer, triage, and dashboard.
+confluent-kafka==2.6.1
+fastavro==1.9.7
+pyarrow==16.1.0
+pyyaml==6.0.1
+psycopg2-binary==2.9.9
+requests==2.32.3
+pydantic==2.8.2
+openai==1.40.0
+fastapi==0.112.0
+uvicorn[standard]==0.30.5

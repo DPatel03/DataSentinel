@@ -28,14 +28,15 @@ class SparkStreamingValidator:
         )
 
     def process_batch(self, batch_df: DataFrame, batch_id: int) -> None:
-        if batch_df.rdd.isEmpty():
+        rows = batch_df.collect()
+        if not rows:
             return
 
-        for row in batch_df.collect():
+        for row in rows:
             self.processor.process_message(row.value)
 
         breaches = self.processor.flush()
-        print(f"Batch {batch_id}: processed {batch_df.count()} messages, {breaches} breaches")
+        print(f"Batch {batch_id}: processed {len(rows)} messages, {breaches} breaches")
 
     def run(self) -> None:
         raw_stream = (

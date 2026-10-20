@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
 from pathlib import Path
 
 import requests
@@ -18,7 +17,7 @@ from agents.config import (
 )
 from agents.llm_client import LLMClient
 from agents.models import ClassificationResult, DLQPayload
-from agents.week3_models import SchemaEvolutionResult
+from agents.agent_outputs import SchemaEvolutionResult
 
 logger = logging.getLogger(__name__)
 

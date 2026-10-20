@@ -1,9 +1,11 @@
-"""OpenAI client with timeout, retries, and mock fallback."""
+"""OpenAI client with timeout, retries, mock fallback, and trace logging."""
 
 from __future__ import annotations
 
 import json
 import logging
+import os
+import time
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -15,6 +17,7 @@ from agents.config import (
     OPENAI_API_KEY,
     OPENAI_MODEL,
 )
+from agents.trace_writer import write_trace
 
 logger = logging.getLogger(__name__)
 
@@ -124,12 +127,28 @@ class LLMClient:
 
             self._client = OpenAI(api_key=OPENAI_API_KEY, timeout=LLM_TIMEOUT_SECONDS)
 
-    def complete_json(self, prompt_name: str, user_payload: dict[str, Any], model_type: type[T]) -> T:
+    def complete_json(
+        self,
+        prompt_name: str,
+        user_payload: dict[str, Any],
+        model_type: type[T],
+        system_prompt: str | None = None,
+    ) -> T:
+        start = time.perf_counter()
         if self.mock:
             data = _mock_json_response(prompt_name, user_payload)
-            return model_type.model_validate(data)
+            result = model_type.model_validate(data)
+            write_trace(
+                agent_name=prompt_name,
+                model="mock",
+                latency_ms=(time.perf_counter() - start) * 1000,
+                input_preview=json.dumps(user_payload, default=str)[:500],
+                output_preview=json.dumps(data)[:500],
+                success=True,
+            )
+            return result
 
-        system_prompt = load_prompt(prompt_name)
+        system_prompt = system_prompt or load_prompt(prompt_name)
         user_content = json.dumps(user_payload, default=str)
 
         last_error: Exception | None = None
@@ -152,9 +171,64 @@ class LLMClient:
                         result = result.model_copy(update={"source": "llm"})
                     except Exception:
                         pass
+
+                usage = getattr(response, "usage", None)
+                input_tokens = getattr(usage, "prompt_tokens", 0) or 0
+                output_tokens = getattr(usage, "completion_tokens", 0) or 0
+                trace_id = write_trace(
+                    agent_name=prompt_name,
+                    model=OPENAI_MODEL,
+                    latency_ms=(time.perf_counter() - start) * 1000,
+                    input_preview=user_content[:500],
+                    output_preview=content[:500],
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    success=True,
+                )
+                self._maybe_langfuse(prompt_name, system_prompt, user_content, content, trace_id, input_tokens, output_tokens)
                 return result
             except Exception as exc:
                 last_error = exc
                 logger.warning("LLM attempt %s failed: %s", attempt, exc)
 
+        write_trace(
+            agent_name=prompt_name,
+            model=OPENAI_MODEL,
+            latency_ms=(time.perf_counter() - start) * 1000,
+            input_preview=user_content[:500],
+            output_preview=str(last_error)[:500],
+            success=False,
+        )
         raise RuntimeError(f"LLM failed after {LLM_MAX_RETRIES} retries: {last_error}")
+
+    def _maybe_langfuse(
+        self,
+        prompt_name: str,
+        system_prompt: str,
+        user_content: str,
+        output: str,
+        trace_id: str,
+        input_tokens: int,
+        output_tokens: int,
+    ) -> None:
+        """Optional Langfuse integration when keys are configured."""
+        public_key = os.getenv("LANGFUSE_PUBLIC_KEY", "")
+        secret_key = os.getenv("LANGFUSE_SECRET_KEY", "")
+        host = os.getenv("LANGFUSE_HOST", "http://localhost:3100")
+        if not public_key or not secret_key:
+            return
+        try:
+            from langfuse import Langfuse
+
+            lf = Langfuse(public_key=public_key, secret_key=secret_key, host=host)
+            trace = lf.trace(id=trace_id, name=prompt_name)
+            trace.generation(
+                name=f"{prompt_name}_completion",
+                model=OPENAI_MODEL,
+                input=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}],
+                output=output,
+                usage={"input": input_tokens, "output": output_tokens},
+            )
+            lf.flush()
+        except Exception as exc:
+            logger.debug("Langfuse trace skipped: %s", exc)

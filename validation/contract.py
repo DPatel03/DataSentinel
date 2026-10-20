@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -11,10 +12,15 @@ import yaml
 CONTRACT_PATH = Path(__file__).resolve().parent / "contracts" / "v1.0.0.yaml"
 
 
+@lru_cache(maxsize=8)
+def _load_contract_cached(path: str) -> dict[str, Any]:
+    with Path(path).open() as handle:
+        return yaml.safe_load(handle)
+
+
 def load_contract(path: Path | None = None) -> dict[str, Any]:
     contract_path = path or CONTRACT_PATH
-    with contract_path.open() as handle:
-        return yaml.safe_load(handle)
+    return _load_contract_cached(str(contract_path.resolve()))
 
 
 def _parse_ts(value: Any) -> datetime | None:
@@ -71,3 +77,13 @@ def validate_record(
             return False, "max_trip_speed_mph", "trip_distance"
 
     return True, None, None
+
+
+def sla_targets(contract: dict[str, Any] | None = None) -> dict[str, float]:
+    """Return contract SLA budgets (failure rate % and p95 latency ms)."""
+    contract = contract or load_contract()
+    slas = contract.get("slas") or {}
+    return {
+        "max_failure_rate_pct": float(slas.get("max_failure_rate_pct", 2.0)),
+        "p95_validation_latency_ms": float(slas.get("p95_validation_latency_ms", 500)),
+    }

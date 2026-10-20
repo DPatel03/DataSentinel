@@ -1,5 +1,42 @@
--- Week 3: anomaly patterns, review queue, schema evolution, prompt registry
+-- Idempotent migrations for existing DataSentinel databases.
+-- Fresh installs get the full schema from init.sql via Docker.
 
+-- AI triage + repair history
+CREATE TABLE IF NOT EXISTS triage_events (
+    time                   TIMESTAMPTZ NOT NULL,
+    record_key             TEXT,
+    rule_violated          TEXT        NOT NULL,
+    failure_class          TEXT        NOT NULL,
+    confidence             DOUBLE PRECISION NOT NULL,
+    explanation            TEXT,
+    affected_field         TEXT,
+    requires_human_review  BOOLEAN     NOT NULL DEFAULT FALSE,
+    classifier_source      TEXT        NOT NULL DEFAULT 'heuristic',
+    raw_payload            JSONB
+);
+
+SELECT create_hypertable('triage_events', 'time', if_not_exists => TRUE);
+
+CREATE INDEX IF NOT EXISTS idx_triage_events_class
+    ON triage_events (failure_class, time DESC);
+
+CREATE TABLE IF NOT EXISTS repair_attempts (
+    time                   TIMESTAMPTZ NOT NULL,
+    record_key             TEXT,
+    original_record        JSONB,
+    repaired_record        JSONB,
+    field_repaired         TEXT,
+    confidence             DOUBLE PRECISION,
+    validation_passed      BOOLEAN     NOT NULL DEFAULT FALSE,
+    routed_to_repaired     BOOLEAN     NOT NULL DEFAULT FALSE
+);
+
+SELECT create_hypertable('repair_attempts', 'time', if_not_exists => TRUE);
+
+CREATE INDEX IF NOT EXISTS idx_repair_attempts_routed
+    ON repair_attempts (routed_to_repaired, time DESC);
+
+-- Anomaly patterns, review queue, schema evolution, prompt registry
 CREATE TABLE IF NOT EXISTS anomaly_patterns (
     id              SERIAL PRIMARY KEY,
     pattern_name    TEXT UNIQUE NOT NULL,
@@ -89,3 +126,52 @@ CREATE TABLE IF NOT EXISTS prompt_eval_runs (
 );
 
 SELECT create_hypertable('prompt_eval_runs', 'time', if_not_exists => TRUE);
+
+-- LLM trace tracking for dashboard
+CREATE TABLE IF NOT EXISTS llm_traces (
+    time            TIMESTAMPTZ NOT NULL,
+    trace_id        TEXT,
+    agent_name      TEXT NOT NULL,
+    model           TEXT,
+    prompt_version  TEXT,
+    input_tokens    INT DEFAULT 0,
+    output_tokens   INT DEFAULT 0,
+    latency_ms      DOUBLE PRECISION,
+    cost_usd        DOUBLE PRECISION DEFAULT 0,
+    success         BOOLEAN NOT NULL DEFAULT TRUE,
+    input_preview   TEXT,
+    output_preview  TEXT
+);
+
+SELECT create_hypertable('llm_traces', 'time', if_not_exists => TRUE);
+
+CREATE INDEX IF NOT EXISTS idx_llm_traces_agent ON llm_traces (agent_name, time DESC);
+
+CREATE TABLE IF NOT EXISTS validation_events (
+    time        TIMESTAMPTZ NOT NULL,
+    is_valid    BOOLEAN     NOT NULL,
+    latency_ms  DOUBLE PRECISION,
+    rule_name   TEXT,
+    record_key  TEXT
+);
+
+SELECT create_hypertable('validation_events', 'time', if_not_exists => TRUE);
+
+CREATE INDEX IF NOT EXISTS idx_validation_events_valid
+    ON validation_events (is_valid, time DESC);
+
+ALTER TABLE contract_breaches ADD COLUMN IF NOT EXISTS record_key TEXT;
+CREATE INDEX IF NOT EXISTS idx_contract_breaches_record_key
+    ON contract_breaches (record_key, time DESC);
+
+CREATE INDEX IF NOT EXISTS idx_triage_events_record_key
+    ON triage_events (record_key, time DESC);
+
+ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS human_label TEXT;
+ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS human_note TEXT;
+
+CREATE TABLE IF NOT EXISTS sla_alert_state (
+    sla_name        TEXT PRIMARY KEY,
+    last_status     TEXT NOT NULL,
+    last_alerted_at TIMESTAMPTZ
+);

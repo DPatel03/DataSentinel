@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -57,7 +58,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Register taxi Avro schemas")
     parser.add_argument(
         "--registry-url",
-        default="http://localhost:8081",
+        default=os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8081"),
         help="Schema Registry URL",
     )
     parser.add_argument(

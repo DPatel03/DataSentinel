@@ -57,7 +57,7 @@ def main() -> int:
             "bootstrap.servers": args.bootstrap_servers,
             "group.id": group_id,
             "auto.offset.reset": "earliest",
-            "enable.auto.commit": True,
+            "enable.auto.commit": False,
         }
     )
     consumer.subscribe(["taxi.rides.raw"])
@@ -77,6 +77,7 @@ def main() -> int:
                 continue
 
             processor.process_message(msg.value())
+            consumer.commit(asynchronous=True)
             processed += 1
 
             if processed % args.flush_every == 0:

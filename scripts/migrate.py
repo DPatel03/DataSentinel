@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply Week 3 database migrations."""
+"""Apply database migrations for existing DataSentinel installations."""
 
 from __future__ import annotations
 
@@ -14,22 +14,25 @@ if str(ROOT) not in sys.path:
 
 from validation.config import load_env, timescaledb_dsn
 
-SQL_FILE = ROOT / "infra" / "week3.sql"
+SQL_FILE = ROOT / "infra" / "migrations.sql"
 
 
 def main() -> int:
     load_env()
+    sql = SQL_FILE.read_text()
+    dsn = timescaledb_dsn()
+
     try:
-        with psycopg2.connect(timescaledb_dsn()) as conn:
+        with psycopg2.connect(dsn) as conn:
             with conn.cursor() as cur:
-                cur.execute(SQL_FILE.read_text())
+                cur.execute(sql)
             conn.commit()
     except psycopg2.Error as exc:
         print(f"Migration failed: {exc}", file=sys.stderr)
+        print("Ensure TimescaleDB is running: docker compose up -d", file=sys.stderr)
         return 1
 
-    print("Week 3 tables ready: anomaly_patterns, anomaly_history, review_queue,")
-    print("  schema_evolution_events, prompt_versions, prompt_eval_runs")
+    print("Database migrations applied.")
     return 0
 
 

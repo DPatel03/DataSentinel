@@ -10,15 +10,16 @@ from pathlib import Path
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-from agents.config import PROMPT_ACCURACY_THRESHOLD, SLACK_WEBHOOK_URL
+from agents.config import OPENAI_API_KEY, PROMPT_ACCURACY_THRESHOLD, PROMPT_EVAL_SAMPLE_SIZE, SLACK_WEBHOOK_URL
 from agents.heuristics import classify_heuristic
-from agents.models import DLQPayload, FailureClass
+from agents.models import ClassificationResult, DLQPayload, FailureClass
 from validation.config import timescaledb_dsn
 
 logger = logging.getLogger(__name__)
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 LABELED_DATA = Path(__file__).resolve().parent / "labeled_data.json"
+FULL_DATASET = Path(__file__).resolve().parents[2] / "eval" / "dataset" / "full_dataset.json"
 
 AGENT_PROMPTS = ("classifier", "repair", "schema_evolution", "anomaly", "escalation")
 
@@ -72,7 +73,14 @@ class PromptRegistry:
         return path.read_text() if path.exists() else ""
 
     def register_version(self, agent_name: str, prompt_text: str) -> dict:
-        """Register new prompt version, eval, rollback if below threshold."""
+        """Register a new prompt version. Activate only if eval passes."""
+        accuracy: float | None = None
+        eval_method: str | None = None
+        passed = True
+        if agent_name == "classifier":
+            accuracy, eval_method = self.evaluate_classifier(prompt_text)
+            passed = accuracy >= PROMPT_ACCURACY_THRESHOLD
+
         with psycopg2.connect(self.dsn) as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -83,84 +91,114 @@ class PromptRegistry:
                 prompt_id = f"{agent_name}_v{next_version}"
 
                 cur.execute(
-                    "UPDATE prompt_versions SET is_active = FALSE WHERE agent_name = %s",
-                    (agent_name,),
-                )
-                cur.execute(
                     """
                     INSERT INTO prompt_versions (
                         prompt_id, agent_name, version, prompt_text,
                         created_at, is_active, accuracy
-                    ) VALUES (%s, %s, %s, %s, %s, TRUE, NULL)
+                    ) VALUES (%s, %s, %s, %s, %s, FALSE, %s)
                     RETURNING id
                     """,
-                    (prompt_id, agent_name, next_version, prompt_text, datetime.now(timezone.utc)),
+                    (
+                        prompt_id,
+                        agent_name,
+                        next_version,
+                        prompt_text,
+                        datetime.now(timezone.utc),
+                        accuracy,
+                    ),
                 )
                 new_id = cur.fetchone()[0]
-            conn.commit()
-
-        accuracy = self.evaluate_classifier_prompt(prompt_text) if agent_name == "classifier" else 1.0
-        rolled_back = False
-
-        with psycopg2.connect(self.dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE prompt_versions SET accuracy = %s WHERE id = %s",
-                    (accuracy, new_id),
-                )
                 cur.execute(
                     """
                     INSERT INTO prompt_eval_runs (time, agent_name, prompt_id, accuracy, passed)
                     VALUES (now(), %s, %s, %s, %s)
                     """,
-                    (agent_name, prompt_id, accuracy, accuracy >= PROMPT_ACCURACY_THRESHOLD),
+                    (agent_name, prompt_id, accuracy, passed),
                 )
 
-                if accuracy < PROMPT_ACCURACY_THRESHOLD:
-                    rolled_back = True
+                rolled_back = not passed
+                if passed:
                     cur.execute(
-                        "UPDATE prompt_versions SET is_active = FALSE WHERE id = %s",
+                        "UPDATE prompt_versions SET is_active = FALSE WHERE agent_name = %s",
+                        (agent_name,),
+                    )
+                    cur.execute(
+                        "UPDATE prompt_versions SET is_active = TRUE WHERE id = %s",
                         (new_id,),
                     )
-                    cur.execute(
-                        """
-                        UPDATE prompt_versions SET is_active = TRUE
-                        WHERE agent_name = %s AND version = (
-                            SELECT max(version) FROM prompt_versions
-                            WHERE agent_name = %s AND id != %s
-                        )
-                        """,
-                        (agent_name, agent_name, new_id),
-                    )
-                    self._alert_rollback(agent_name, prompt_id, accuracy)
+                else:
+                    self._alert_rollback(agent_name, prompt_id, accuracy or 0.0)
             conn.commit()
 
         return {
             "prompt_id": prompt_id,
             "version": next_version,
             "accuracy": accuracy,
-            "passed": accuracy >= PROMPT_ACCURACY_THRESHOLD,
+            "passed": passed,
             "rolled_back": rolled_back,
+            "eval_method": eval_method,
         }
 
     def evaluate_classifier_prompt(self, prompt_text: str | None = None) -> float:
-        """Eval classifier using labeled dataset + heuristics as oracle."""
-        if not LABELED_DATA.exists():
-            return 1.0
+        accuracy, _method = self.evaluate_classifier(prompt_text)
+        return accuracy
 
-        samples = json.loads(LABELED_DATA.read_text())
-        if not samples:
-            return 1.0
+    def evaluate_classifier(self, prompt_text: str | None = None) -> tuple[float, str]:
+        """Score a classifier prompt. Uses a live LLM held-out slice when an API key is set."""
+        heuristic_acc = self._heuristic_accuracy()
+        if prompt_text and OPENAI_API_KEY:
+            try:
+                llm_acc = self._llm_held_out_accuracy(prompt_text)
+                return llm_acc, "llm_held_out"
+            except Exception as exc:
+                logger.warning("LLM prompt eval failed, using heuristic gate: %s", exc)
+        return heuristic_acc, "heuristic_labeled_set"
 
+    def _load_labeled_samples(self) -> list[dict]:
+        dataset_path = FULL_DATASET if FULL_DATASET.exists() else LABELED_DATA
+        if not dataset_path.exists():
+            return []
+        samples = json.loads(dataset_path.read_text())
+        return [s for s in samples if s.get("expected_class") not in ("clean", None)]
+
+    def _heuristic_accuracy(self) -> float:
+        labeled = self._load_labeled_samples()
+        if not labeled:
+            return 1.0
         correct = 0
-        for sample in samples:
+        for sample in labeled:
             payload = DLQPayload.model_validate(sample["payload"])
             expected = FailureClass(sample["expected_class"])
             predicted = classify_heuristic(payload).failure_class
             if predicted == expected:
                 correct += 1
+        return round(correct / len(labeled), 4)
 
-        return round(correct / len(samples), 4)
+    def _llm_held_out_accuracy(self, prompt_text: str) -> float:
+        """Run the candidate prompt on a small held-out slice (cost-capped)."""
+        from agents.llm_client import LLMClient
+
+        labeled = self._load_labeled_samples()
+        if not labeled:
+            return 1.0
+        step = max(1, len(labeled) // PROMPT_EVAL_SAMPLE_SIZE)
+        held_out = labeled[::step][:PROMPT_EVAL_SAMPLE_SIZE]
+        client = LLMClient()
+        if client.mock:
+            return self._heuristic_accuracy()
+
+        correct = 0
+        for sample in held_out:
+            payload = DLQPayload.model_validate(sample["payload"])
+            result = client.complete_json(
+                "classifier",
+                payload.model_dump(),
+                ClassificationResult,
+                system_prompt=prompt_text,
+            )
+            if result.failure_class.value == sample["expected_class"]:
+                correct += 1
+        return round(correct / len(held_out), 4)
 
     def list_versions(self, agent_name: str) -> list[dict]:
         with psycopg2.connect(self.dsn) as conn:

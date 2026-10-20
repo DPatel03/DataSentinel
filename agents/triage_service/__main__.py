@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Kafka consumer — full triage pipeline (Week 2 + Week 3 agents)."""
+"""Kafka consumer — full AI triage pipeline."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from agents.llm_client import LLMClient
 from agents.models import DLQPayload
 from agents.prompt_registry.registry import PromptRegistry
 from agents.triage_writer import TriageWriter
+from ingestion.keys import ride_key
 from validation.config import load_env, timescaledb_dsn
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -77,7 +78,7 @@ def main() -> int:
             "bootstrap.servers": args.bootstrap_servers,
             "group.id": group_id,
             "auto.offset.reset": "earliest",
-            "enable.auto.commit": True,
+            "enable.auto.commit": False,
         }
     )
     consumer.subscribe([DLQ_TOPIC])
@@ -102,14 +103,22 @@ def main() -> int:
                 payload = DLQPayload.model_validate(raw)
             except Exception as exc:
                 logger.error("Invalid DLQ payload: %s", exc)
+                consumer.commit(asynchronous=True)
                 continue
 
             record_key = (
-                (payload.record or {}).get("pickup_datetime")
-                or (msg.key().decode("utf-8") if msg.key() else "unknown")
+                msg.key().decode("utf-8")
+                if msg.key()
+                else ride_key(payload.record)
             )
 
-            outcome = coordinator.process(payload, record_key=record_key)
+            try:
+                outcome = coordinator.process(payload, record_key=record_key)
+            except Exception as exc:
+                logger.exception("Triage failed for %s: %s", record_key, exc)
+                consumer.commit(asynchronous=True)
+                continue
+
             writer.write_outcome(outcome, record_key)
 
             if outcome.repair and outcome.repair.routed_to_repaired:
@@ -163,6 +172,7 @@ def main() -> int:
 
             stats["processed"] += 1
             producer.poll(0)
+            consumer.commit(asynchronous=True)
 
     finally:
         producer.flush()
